@@ -19,16 +19,28 @@ bool lastStartState = HIGH;
 bool lastCalibState = HIGH;
 bool sensorWarmedUp = false;
 
+void bootScreen();
+void warmupSensor();
+void handleCalibButton();
+void calibrate();
+void handleStartButton();
+void measureAlcohol();
+void displayResult();
+void updateDisplay();
+void drawBattery(int x, int y, int pct);
+
 void setup() {
   pinMode(START_BTN, INPUT_PULLUP);
   pinMode(CALIB_BTN, INPUT_PULLUP);
   pinMode(BUZZER_PIN, OUTPUT);
 
+  Serial.begin(9600);
+
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
   display.setTextColor(SSD1306_WHITE);
 
   bootScreen();
-  warmupSensor(); // 30s warmup pri starte
+  warmupSensor();
 }
 
 void loop() {
@@ -44,28 +56,20 @@ void loop() {
   delay(10);
 }
 
-// ── Warmup 30 sekund ────────────────────────────────────────────────────────
+void bootScreen() {
+  display.clearDisplay();
+  display.display();
+  tone(BUZZER_PIN, 1800, 150);
+  delay(150);
+  tone(BUZZER_PIN, 1800, 150);
+  delay(1500);
+}
+
+//Warmup 30 sekund, poslednych 5 sekund pipa 
 void warmupSensor() {
   int totalSeconds = 30;
 
   for (int s = totalSeconds; s >= 1; s--) {
-    // Skontroluje či bolo stlačené 3x kalibračné tlačidlo
-    static int calibPresses = 0;
-    bool state = digitalRead(CALIB_BTN);
-    if (lastCalibState == HIGH && state == LOW) {
-      calibPresses++;
-      tone(BUZZER_PIN, 1500, 80);
-      if (calibPresses >= 3) {
-        calibPresses = 0;
-        sensorWarmedUp = true;
-        tone(BUZZER_PIN, 1800, 200);
-        delay(200);
-        tone(BUZZER_PIN, 1800, 200);
-        return;
-      }
-    }
-    lastCalibState = state;
-
     display.clearDisplay();
 
     display.setTextSize(1);
@@ -87,33 +91,21 @@ void warmupSensor() {
 
     display.display();
 
-    // Čakaj 1 sekundu ale kontroluj tlačidlo každých 10ms
-    for (int ms = 0; ms < 100; ms++) {
-      state = digitalRead(CALIB_BTN);
-      if (lastCalibState == HIGH && state == LOW) {
-        calibPresses++;
-        tone(BUZZER_PIN, 1500, 80);
-        if (calibPresses >= 3) {
-          calibPresses = 0;
-          sensorWarmedUp = true;
-          tone(BUZZER_PIN, 1800, 200);
-          delay(200);
-          tone(BUZZER_PIN, 1800, 200);
-          return;
-        }
-      }
-      lastCalibState = state;
-      delay(10);
+    if (s <= 5) {
+      tone(BUZZER_PIN, 1500, 120);
     }
+
+    delay(1000);
   }
 
   sensorWarmedUp = true;
   tone(BUZZER_PIN, 1800, 200);
   delay(200);
   tone(BUZZER_PIN, 1800, 200);
+  Serial.println("Warmup dokonceny");
 }
 
-// ── Kalibrácia ──────────────────────────────────────────────────────────────
+// Kalibracne tlacidlo: zoberie aktualnu raw hodnotu ako baseline 
 void handleCalibButton() {
   bool state = digitalRead(CALIB_BTN);
 
@@ -128,33 +120,31 @@ void handleCalibButton() {
 void calibrate() {
   display.clearDisplay();
   display.setTextSize(1);
-  display.setCursor(20, 10);
+  display.setCursor(18, 10);
   display.println("KALIBRACIA...");
   display.display();
 
-  long sum = 0;
-  for (int i = 0; i < 20; i++) {
-    sum += analogRead(MQ3_PIN);
-    delay(50);
-  }
-  baseline = sum / 20;
+  baseline = analogRead(MQ3_PIN);
 
-  tone(BUZZER_PIN, 1500, 100);
+  Serial.print("Nova baseline/raw: ");
+  Serial.println(baseline);
+
+  tone(BUZZER_PIN, 1500, 120);
   delay(150);
-  tone(BUZZER_PIN, 1500, 100);
+  tone(BUZZER_PIN, 1500, 120);
 
   display.clearDisplay();
   display.setTextSize(1);
   display.setCursor(25, 10);
   display.println("HOTOVO!");
   display.setCursor(10, 28);
-  display.print("Baseline: ");
+  display.print("Raw: ");
   display.print(baseline);
   display.display();
   delay(1500);
 }
 
-// ── Start button ─────────────────────────────────────────────────────────────
+//Start merania 
 void handleStartButton() {
   bool state = digitalRead(START_BTN);
 
@@ -168,19 +158,16 @@ void handleStartButton() {
 }
 
 void measureAlcohol() {
-  // Po warme len 3 sekundy odpočet
- int countdown = sensorWarmedUp ? 5 : 10;
+  int countdown = sensorWarmedUp ? 5 : 10;
 
   for (int i = countdown; i >= 1; i--) {
     display.clearDisplay();
-
     display.setTextSize(2);
     display.setCursor(24, 2);
-    display.print("FUKAJ!"); // FÚKAJ
+    display.print("FUKAJ!");
 
     display.setTextSize(4);
-    int xPos = 52;
-    display.setCursor(xPos, 24);
+    display.setCursor(52, 24);
     display.print(i);
 
     display.display();
@@ -204,32 +191,43 @@ void measureAlcohol() {
 
   float raw_span = max_val - baseline;
   if (raw_span < 0) raw_span = 0;
+
   alcohol_promile = (raw_span / 700.0) * 4.0;
   alcohol_promile = constrain(alcohol_promile, 0.0, 4.0);
+
+  Serial.println("===== VYSLEDOK =====");
+  Serial.print("Baseline raw: ");
+  Serial.println(baseline);
+  Serial.print("Max raw:      ");
+  Serial.println(max_val);
+  Serial.print("Raw span:     ");
+  Serial.println(raw_span);
+  Serial.print("Promile:      ");
+  Serial.print(alcohol_promile, 2);
+  Serial.println(" o/oo");
+  Serial.println("====================");
 
   displayResult();
 }
 
-// ── Výsledok – len číslo ────────────────────────────────────────────────────
 void displayResult() {
   display.clearDisplay();
 
-  // Malý label hore
   display.setTextSize(1);
   display.setCursor(44, 0);
   display.print("o/oo");
 
-  // Veľké číslo vycentrované
   display.setTextSize(4);
   char buf[8];
   dtostrf(alcohol_promile, 4, 2, buf);
-  // Centrovanie: 4 znaky × ~24px = 96px → x = (128-96)/2 = 16
   display.setCursor(16, 18);
   display.print(buf);
 
-  // Buzzer podľa hodnoty
   if (alcohol_promile >= 0.50) {
-    for (int i = 0; i < 4; i++) { tone(BUZZER_PIN, 800, 300); delay(400); }
+    for (int i = 0; i < 4; i++) {
+      tone(BUZZER_PIN, 800, 300);
+      delay(400);
+    }
   } else if (alcohol_promile >= 0.20) {
     tone(BUZZER_PIN, 1200, 400);
   } else {
@@ -240,11 +238,11 @@ void displayResult() {
   delay(6000);
 }
 
-// ── Live display ─────────────────────────────────────────────────────────────
 void updateDisplay() {
   int raw = analogRead(MQ3_PIN);
   float raw_span = raw - baseline;
   if (raw_span < 0) raw_span = 0;
+
   float live_promile = (raw_span / 700.0) * 4.0;
   live_promile = constrain(live_promile, 0.0, 4.0);
 
@@ -254,7 +252,6 @@ void updateDisplay() {
   bat_pct = constrain(bat_pct, 0, 100);
 
   display.clearDisplay();
-
   display.setTextSize(1);
   display.setCursor(0, 0);
   display.print("DREGER");
@@ -274,23 +271,15 @@ void updateDisplay() {
   display.display();
 }
 
-
 void drawBattery(int x, int y, int pct) {
   display.drawRect(x, y + 1, 24, 8, SSD1306_WHITE);
   display.fillRect(x + 24, y + 2, 3, 4, SSD1306_WHITE);
+
   int fill = (int)(20.0 * pct / 100.0);
   if (fill > 0) display.fillRect(x + 2, y + 3, fill, 4, SSD1306_WHITE);
+
   display.setTextSize(1);
   display.setCursor(x - 28, y + 1);
   display.print(pct);
   display.print("%");
-}
-
-void bootScreen() {
-  display.clearDisplay();
-  display.display();
-  tone(BUZZER_PIN, 1800, 150);
-  delay(150);
-  tone(BUZZER_PIN, 1800, 150);
-  delay(1500);
 }
